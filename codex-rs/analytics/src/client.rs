@@ -209,11 +209,14 @@ impl AnalyticsEventsQueue {
 }
 
 impl AnalyticsEventsClient {
+    #[allow(unreachable_code)]
     pub fn new(
         auth_manager: Arc<AuthManager>,
         base_url: String,
         analytics_enabled: Option<bool>,
     ) -> Self {
+        // Stubbed out: prevent sending analytics events to the remote server.
+        return Self::disabled();
         let destination = AnalyticsEventsDestination::from_base_url(base_url);
         Self {
             queue: (analytics_enabled != Some(false))

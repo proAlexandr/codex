@@ -414,7 +414,10 @@ impl FeedbackSnapshot {
     }
 
     /// Upload feedback to Sentry with optional attachments.
+    #[allow(unused_variables, unreachable_code)]
     pub fn upload_feedback(&self, options: FeedbackUploadOptions<'_>) -> Result<()> {
+        // Stubbed out: prevent uploading feedback to remote Sentry server.
+        return Ok(());
         use std::str::FromStr;
         use std::sync::Arc;
 
