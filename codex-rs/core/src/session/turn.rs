@@ -1999,6 +1999,89 @@ fn assign_missing_streamed_response_item_id(
     Session::assign_missing_response_item_id(item);
 }
 
+fn parse_openrouter_usage_cost(usage: Option<&serde_json::Value>) -> f64 {
+    let cost = usage
+        .and_then(|usage| usage.get("cost"))
+        .and_then(|value| match value {
+            serde_json::Value::Number(number) => number.as_f64(),
+            serde_json::Value::String(text) => text.parse::<f64>().ok(),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    if cost.is_finite() && cost > 0.0 {
+        cost
+    } else {
+        0.0
+    }
+}
+
+fn update_openrouter_daily_cost(
+    codex_home: &Path,
+    response_id: &str,
+    metadata: Option<&ResponseCompletedMetadata>,
+) {
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let path = codex_home
+        .join("openrouter")
+        .join("daily-cost")
+        .join(format!("{date}.json"));
+    if let Some(parent) = path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        error!("failed to create openrouter daily cost dir: {err}");
+        return;
+    }
+
+    let mut document = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "total": { "cost": 0.0 },
+                "gen_ids": [],
+            })
+        });
+    let current_total = document
+        .get("total")
+        .and_then(|total| total.get("cost"))
+        .and_then(|value| match value {
+            serde_json::Value::Number(number) => number.as_f64(),
+            serde_json::Value::String(text) => text.parse::<f64>().ok(),
+            _ => None,
+        })
+        .filter(|cost| cost.is_finite() && *cost >= 0.0)
+        .unwrap_or(0.0);
+    let mut gen_ids = document
+        .get("gen_ids")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let existing_ids: HashSet<&str> = gen_ids
+        .iter()
+        .filter_map(|entry| entry.get("id").and_then(serde_json::Value::as_str))
+        .collect();
+
+    let mut next_total = current_total;
+    if !existing_ids.contains(response_id) {
+        next_total +=
+            parse_openrouter_usage_cost(metadata.and_then(|metadata| metadata.usage.as_ref()));
+        gen_ids.push(serde_json::json!({ "id": response_id }));
+    }
+    document["total"] = serde_json::json!({ "cost": next_total });
+    document["gen_ids"] = serde_json::Value::Array(gen_ids);
+
+    let payload = match serde_json::to_vec(&document) {
+        Ok(payload) => payload,
+        Err(err) => {
+            error!("failed to serialize openrouter daily cost payload: {err}");
+            return;
+        }
+    };
+    if let Err(err) = std::fs::write(path, payload) {
+        error!("failed to write openrouter daily cost payload: {err}");
+    }
+}
+
 fn append_openrouter_response_completed_log(
     codex_home: &Path,
     session_id: &ThreadId,
@@ -2402,14 +2485,19 @@ async fn try_run_sampling_request(
                 token_usage,
                 end_turn,
             } => {
-                if is_openrouter_provider(&turn_context)
-                    && let Some(metadata) = metadata.as_ref()
-                {
-                    append_openrouter_response_completed_log(
+                if is_openrouter_provider(&turn_context) {
+                    if let Some(metadata) = metadata.as_ref() {
+                        append_openrouter_response_completed_log(
+                            turn_context.config.codex_home.as_path(),
+                            &sess.thread_id(),
+                            &response_id,
+                            metadata,
+                        );
+                    }
+                    update_openrouter_daily_cost(
                         turn_context.config.codex_home.as_path(),
-                        &sess.thread_id(),
                         &response_id,
-                        metadata,
+                        metadata.as_ref(),
                     );
                 }
                 flush_assistant_text_segments_all(

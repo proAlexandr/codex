@@ -2226,8 +2226,13 @@ impl App {
                     }
                 }
             }
-            AppEvent::StatusLineCostUpdated { cost, session_id } => {
-                self.chat_widget.set_status_line_cost(cost, session_id);
+            AppEvent::StatusLineCostUpdated {
+                daily_cost,
+                cost,
+                session_id,
+            } => {
+                self.chat_widget
+                    .set_status_line_cost(daily_cost, cost, session_id);
                 self.refresh_status_line();
             }
             AppEvent::StatusLineBranchUpdated { cwd, branch } => {

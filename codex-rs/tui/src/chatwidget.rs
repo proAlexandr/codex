@@ -725,6 +725,8 @@ pub(crate) struct ChatWidget {
     terminal_title_animation_origin: Instant,
     // Current model provider identifier for status-line provider-specific items.
     status_line_provider_id: Option<String>,
+    // Cached OpenRouter daily cost for the status line.
+    status_line_daily_cost: Option<f64>,
     // Cached OpenRouter session cost for the status line.
     status_line_cost: Option<f64>,
     // Session id used to resolve the cached cost.

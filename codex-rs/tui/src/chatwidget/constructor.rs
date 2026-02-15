@@ -228,6 +228,7 @@ impl ChatWidget {
             terminal_title_setup_original_items: None,
             terminal_title_animation_origin: Instant::now(),
             status_line_provider_id: None,
+            status_line_daily_cost: None,
             status_line_cost: None,
             status_line_cost_session_id: None,
             status_line_cost_pending: false,

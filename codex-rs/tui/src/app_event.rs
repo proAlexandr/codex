@@ -1049,6 +1049,7 @@ pub(crate) enum AppEvent {
 
     /// Async update of status-line cost for a session.
     StatusLineCostUpdated {
+        daily_cost: f64,
         cost: f64,
         session_id: ThreadId,
     },

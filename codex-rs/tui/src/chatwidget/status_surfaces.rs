@@ -57,7 +57,9 @@ struct StatusSurfaceSelections {
 
 impl StatusSurfaceSelections {
     fn uses_openrouter_cost(&self) -> bool {
-        self.status_line_items.contains(&StatusLineItem::Cost)
+        self.status_line_items
+            .iter()
+            .any(|item| matches!(item, StatusLineItem::DailyCost | StatusLineItem::Cost))
     }
 
     fn uses_git_branch(&self) -> bool {
@@ -94,11 +96,17 @@ pub(super) struct CachedProjectRootName {
 
 impl ChatWidget {
     /// Stores async status-line cost lookup results for the current session.
-    pub(crate) fn set_status_line_cost(&mut self, cost: f64, session_id: ThreadId) {
+    pub(crate) fn set_status_line_cost(
+        &mut self,
+        daily_cost: f64,
+        cost: f64,
+        session_id: ThreadId,
+    ) {
         if self.status_line_cost_session_id.as_ref() != Some(&session_id) {
             self.status_line_cost_pending = false;
             return;
         }
+        self.status_line_daily_cost = Some(daily_cost.max(0.0));
         self.status_line_cost = Some(cost.max(0.0));
         self.status_line_cost_pending = false;
         self.status_line_cost_lookup_complete = true;
@@ -121,6 +129,7 @@ impl ChatWidget {
             return;
         }
         self.status_line_cost_session_id = session_id;
+        self.status_line_daily_cost = None;
         self.status_line_cost = None;
         self.status_line_cost_pending = false;
         self.status_line_cost_lookup_complete = false;
@@ -140,12 +149,19 @@ impl ChatWidget {
         let tx = self.app_event_tx.clone();
         let codex_home = self.config.codex_home.clone();
         tokio::spawn(async move {
-            let cost = tokio::task::spawn_blocking(move || {
-                read_openrouter_session_cost(codex_home.as_path(), &session_id)
+            let (daily_cost, cost) = tokio::task::spawn_blocking(move || {
+                (
+                    read_openrouter_daily_cost(codex_home.as_path()),
+                    read_openrouter_session_cost(codex_home.as_path(), &session_id),
+                )
             })
             .await
-            .unwrap_or(0.0);
-            tx.send(AppEvent::StatusLineCostUpdated { cost, session_id });
+            .unwrap_or((0.0, 0.0));
+            tx.send(AppEvent::StatusLineCostUpdated {
+                daily_cost,
+                cost,
+                session_id,
+            });
         });
     }
 
@@ -205,6 +221,7 @@ impl ChatWidget {
 
     fn sync_status_surface_shared_state(&mut self, selections: &StatusSurfaceSelections) {
         if !selections.uses_openrouter_cost() || !self.status_line_uses_openrouter() {
+            self.status_line_daily_cost = None;
             self.status_line_cost = None;
             self.status_line_cost_session_id = None;
             self.status_line_cost_pending = false;
@@ -804,6 +821,9 @@ impl ChatWidget {
                 "{} in",
                 format_tokens_compact(self.status_line_total_usage().input_tokens)
             )),
+            StatusLineItem::DailyCost => self
+                .status_line_uses_openrouter()
+                .then(|| format!("${:.2}", self.status_line_daily_cost.unwrap_or(0.0))),
             StatusLineItem::Cost => self
                 .status_line_uses_openrouter()
                 .then(|| format!("${:.2}", self.status_line_cost.unwrap_or(0.0))),
@@ -868,6 +888,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::ContextWindowSize => StatusLineItem::ContextWindowSize,
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
+            StatusSurfacePreviewItem::DailyCost => StatusLineItem::DailyCost,
             StatusSurfacePreviewItem::Cost => StatusLineItem::Cost,
             StatusSurfacePreviewItem::TotalOutputTokens => StatusLineItem::TotalOutputTokens,
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
@@ -1078,6 +1099,37 @@ impl ChatWidget {
         let mut truncated = head.graphemes(true).take(max_chars - 3).collect::<String>();
         truncated.push_str("...");
         truncated
+    }
+}
+
+pub(super) fn read_openrouter_daily_cost(codex_home: &Path) -> f64 {
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let path = codex_home
+        .join("openrouter")
+        .join("daily-cost")
+        .join(format!("{date}.json"));
+    let payload = match std::fs::read_to_string(path) {
+        Ok(payload) => payload,
+        Err(_) => return 0.0,
+    };
+    let value = match serde_json::from_str::<Value>(&payload) {
+        Ok(value) => value,
+        Err(_) => return 0.0,
+    };
+    let cost = value
+        .get("total")
+        .and_then(|total| total.get("cost"))
+        .and_then(|cost| match cost {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.parse::<f64>().ok(),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+
+    if cost.is_finite() && cost > 0.0 {
+        cost
+    } else {
+        0.0
     }
 }
 

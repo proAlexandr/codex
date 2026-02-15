@@ -2,6 +2,7 @@ use super::*;
 use crate::bottom_pane::goal_status_indicator_line;
 use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
 use crate::chatwidget::rate_limits::get_limits_duration;
+use crate::chatwidget::status_surfaces::read_openrouter_daily_cost;
 use crate::chatwidget::status_surfaces::read_openrouter_session_cost;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
 use pretty_assertions::assert_eq;
@@ -3296,6 +3297,28 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
 }
 
 #[tokio::test]
+async fn status_line_daily_cost_value_for_openrouter_defaults_to_zero() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_provider_id = Some("openrouter".to_string());
+    chat.status_line_daily_cost = None;
+
+    let value = chat.status_line_value_for_item(StatusLineItem::DailyCost);
+
+    assert_eq!(value, Some("$0.00".to_string()));
+}
+
+#[tokio::test]
+async fn status_line_daily_cost_value_hidden_for_non_openrouter() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_provider_id = Some("openai".to_string());
+    chat.status_line_daily_cost = Some(1.23);
+
+    let value = chat.status_line_value_for_item(StatusLineItem::DailyCost);
+
+    assert_eq!(value, None);
+}
+
+#[tokio::test]
 async fn status_line_cost_value_for_openrouter_defaults_to_zero() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_provider_id = Some("openrouter".to_string());
@@ -3315,6 +3338,30 @@ async fn status_line_cost_value_hidden_for_non_openrouter() {
     let value = chat.status_line_value_for_item(StatusLineItem::Cost);
 
     assert_eq!(value, None);
+}
+
+#[test]
+fn read_openrouter_daily_cost_reads_total_cost_for_today() {
+    let codex_home = tempdir().expect("tempdir");
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let path = codex_home.path().join("openrouter").join("daily-cost");
+    std::fs::create_dir_all(&path).expect("create openrouter daily-cost path");
+    std::fs::write(
+        path.join(format!("{date}.json")),
+        r#"{"total":{"cost":1.25},"gen_ids":[{"id":"gen_1"}]}"#,
+    )
+    .expect("write openrouter daily cost");
+
+    let total = read_openrouter_daily_cost(codex_home.path());
+    assert!((total - 1.25).abs() < 1e-9, "unexpected total: {total}");
+}
+
+#[test]
+fn read_openrouter_daily_cost_returns_zero_when_missing() {
+    let codex_home = tempdir().expect("tempdir");
+
+    let total = read_openrouter_daily_cost(codex_home.path());
+    assert_eq!(total, 0.0);
 }
 
 #[test]
