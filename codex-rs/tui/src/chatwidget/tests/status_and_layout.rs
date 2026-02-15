@@ -2,6 +2,7 @@ use super::*;
 use crate::bottom_pane::goal_status_indicator_line;
 use crate::chatwidget::rate_limits::NUDGE_MODEL_SLUG;
 use crate::chatwidget::rate_limits::get_limits_duration;
+use crate::chatwidget::status_surfaces::read_openrouter_session_cost;
 use codex_app_server_protocol::SpendControlLimitSnapshot;
 use pretty_assertions::assert_eq;
 use ratatui::backend::TestBackend;
@@ -3292,6 +3293,62 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
         "status_line_model_with_reasoning_fast_footer",
         normalized_backend_snapshot(terminal.backend())
     );
+}
+
+#[tokio::test]
+async fn status_line_cost_value_for_openrouter_defaults_to_zero() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_provider_id = Some("openrouter".to_string());
+    chat.status_line_cost = None;
+
+    let value = chat.status_line_value_for_item(StatusLineItem::Cost);
+
+    assert_eq!(value, Some("$0.00".to_string()));
+}
+
+#[tokio::test]
+async fn status_line_cost_value_hidden_for_non_openrouter() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.status_line_provider_id = Some("openai".to_string());
+    chat.status_line_cost = Some(1.23);
+
+    let value = chat.status_line_value_for_item(StatusLineItem::Cost);
+
+    assert_eq!(value, None);
+}
+
+#[test]
+fn read_openrouter_session_cost_sums_usage_cost() {
+    let codex_home = tempdir().expect("tempdir");
+    let session_id = ThreadId::new();
+    let path = codex_home
+        .path()
+        .join("openrouter")
+        .join("sessions")
+        .join(session_id.to_string());
+    std::fs::create_dir_all(&path).expect("create openrouter session path");
+    std::fs::write(
+        path.join("response.completed.jsonl"),
+        r#"{"usage":{"cost":0.10}}
+{"usage":{"cost":"0.25"}}
+{"usage":{"cost":"not-a-number"}}
+{"usage":{"other":1}}
+not-json
+"#,
+    )
+    .expect("write response completed log");
+
+    let total = read_openrouter_session_cost(codex_home.path(), &session_id);
+    assert!((total - 0.35).abs() < 1e-9, "unexpected total: {total}");
+}
+
+#[test]
+fn read_openrouter_session_cost_returns_zero_when_missing() {
+    let codex_home = tempdir().expect("tempdir");
+    let session_id = ThreadId::new();
+
+    let total = read_openrouter_session_cost(codex_home.path(), &session_id);
+    assert_eq!(total, 0.0);
 }
 
 #[tokio::test]

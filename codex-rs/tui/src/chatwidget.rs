@@ -723,6 +723,16 @@ pub(crate) struct ChatWidget {
     terminal_title_setup_original_items: Option<Option<Vec<String>>>,
     // Baseline instant used to animate spinner-prefixed title statuses.
     terminal_title_animation_origin: Instant,
+    // Current model provider identifier for status-line provider-specific items.
+    status_line_provider_id: Option<String>,
+    // Cached OpenRouter session cost for the status line.
+    status_line_cost: Option<f64>,
+    // Session id used to resolve the cached cost.
+    status_line_cost_session_id: Option<ThreadId>,
+    // True while an async cost lookup is in flight.
+    status_line_cost_pending: bool,
+    // True once we've attempted a cost lookup for the current session.
+    status_line_cost_lookup_complete: bool,
     // Cached project-root display name keyed by cwd for status/title rendering.
     status_line_project_root_name_cache: Option<CachedProjectRootName>,
     // Cached git branch name for the status line (None if unknown).

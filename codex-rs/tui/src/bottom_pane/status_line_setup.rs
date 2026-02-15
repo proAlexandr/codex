@@ -121,6 +121,9 @@ pub(crate) enum StatusLineItem {
     /// Total input tokens consumed.
     TotalInputTokens,
 
+    /// Total OpenRouter session cost.
+    Cost,
+
     /// Total output tokens generated.
     TotalOutputTokens,
 
@@ -181,6 +184,7 @@ impl StatusLineItem {
             }
             StatusLineItem::UsedTokens => "Total tokens used in session (omitted when zero)",
             StatusLineItem::TotalInputTokens => "Total input tokens used in session",
+            StatusLineItem::Cost => "Total OpenRouter session cost (shown only on OpenRouter)",
             StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
             StatusLineItem::SessionId => "Current thread identifier (omitted until thread starts)",
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
@@ -218,6 +222,7 @@ impl StatusLineItem {
             StatusLineItem::ContextWindowSize => StatusSurfacePreviewItem::ContextWindowSize,
             StatusLineItem::UsedTokens => StatusSurfacePreviewItem::UsedTokens,
             StatusLineItem::TotalInputTokens => StatusSurfacePreviewItem::TotalInputTokens,
+            StatusLineItem::Cost => StatusSurfacePreviewItem::Cost,
             StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,

@@ -1047,6 +1047,11 @@ pub(crate) enum AppEvent {
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
 
+    /// Async update of status-line cost for a session.
+    StatusLineCostUpdated {
+        cost: f64,
+        session_id: ThreadId,
+    },
     /// Async update of the current git branch for status line rendering.
     StatusLineBranchUpdated {
         cwd: PathBuf,

@@ -17,6 +17,7 @@ impl ChatWidget {
             history_metadata.entry_count,
         );
         self.set_skills(/*skills*/ None);
+        self.status_line_provider_id = Some(session.model_provider_id.clone());
         self.session_network_proxy = session.network_proxy.clone();
         let previous_thread_id = self.thread_id;
         self.thread_id = Some(session.thread_id);

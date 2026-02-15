@@ -169,6 +169,7 @@ impl ChatWidget {
             self.turn_runtime_metrics = RuntimeMetricsSummary::default();
             self.transcript.needs_final_message_separator = false;
             self.transcript.had_work_activity = false;
+            self.request_status_line_cost_refresh();
             self.request_status_line_branch_refresh();
             self.request_status_line_git_summary_refresh();
         }

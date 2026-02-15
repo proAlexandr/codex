@@ -43,6 +43,7 @@ impl StatusLineAccent {
             | StatusLineItem::ContextWindowSize
             | StatusLineItem::UsedTokens
             | StatusLineItem::TotalInputTokens
+            | StatusLineItem::Cost
             | StatusLineItem::TotalOutputTokens => Self::Usage,
             StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => Self::Limit,
             StatusLineItem::CodexVersion | StatusLineItem::SessionId => Self::Metadata,

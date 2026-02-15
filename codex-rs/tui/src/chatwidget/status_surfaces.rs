@@ -16,6 +16,10 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_sandbox_summary::summarize_permission_profile;
+use serde_json::Value;
+use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
 
 use super::status_state::TerminalTitleStatusKind;
 
@@ -52,6 +56,10 @@ struct StatusSurfaceSelections {
 }
 
 impl StatusSurfaceSelections {
+    fn uses_openrouter_cost(&self) -> bool {
+        self.status_line_items.contains(&StatusLineItem::Cost)
+    }
+
     fn uses_git_branch(&self) -> bool {
         self.status_line_items.contains(&StatusLineItem::GitBranch)
             || self
@@ -85,6 +93,62 @@ pub(super) struct CachedProjectRootName {
 }
 
 impl ChatWidget {
+    /// Stores async status-line cost lookup results for the current session.
+    pub(crate) fn set_status_line_cost(&mut self, cost: f64, session_id: ThreadId) {
+        if self.status_line_cost_session_id.as_ref() != Some(&session_id) {
+            self.status_line_cost_pending = false;
+            return;
+        }
+        self.status_line_cost = Some(cost.max(0.0));
+        self.status_line_cost_pending = false;
+        self.status_line_cost_lookup_complete = true;
+    }
+
+    /// Forces a new cost lookup when `Cost` is configured for an OpenRouter session.
+    pub(super) fn request_status_line_cost_refresh(&mut self) {
+        let selections = self.status_surface_selections();
+        if !selections.uses_openrouter_cost() || !self.status_line_uses_openrouter() {
+            return;
+        }
+        self.sync_status_line_cost_state(self.thread_id);
+        if let Some(session_id) = self.thread_id {
+            self.request_status_line_cost(session_id);
+        }
+    }
+
+    fn sync_status_line_cost_state(&mut self, session_id: Option<ThreadId>) {
+        if self.status_line_cost_session_id == session_id {
+            return;
+        }
+        self.status_line_cost_session_id = session_id;
+        self.status_line_cost = None;
+        self.status_line_cost_pending = false;
+        self.status_line_cost_lookup_complete = false;
+    }
+
+    fn status_line_uses_openrouter(&self) -> bool {
+        self.status_line_provider_id
+            .as_deref()
+            .is_some_and(|provider| provider.eq_ignore_ascii_case("openrouter"))
+    }
+
+    fn request_status_line_cost(&mut self, session_id: ThreadId) {
+        if self.status_line_cost_pending {
+            return;
+        }
+        self.status_line_cost_pending = true;
+        let tx = self.app_event_tx.clone();
+        let codex_home = self.config.codex_home.clone();
+        tokio::spawn(async move {
+            let cost = tokio::task::spawn_blocking(move || {
+                read_openrouter_session_cost(codex_home.as_path(), &session_id)
+            })
+            .await
+            .unwrap_or(0.0);
+            tx.send(AppEvent::StatusLineCostUpdated { cost, session_id });
+        });
+    }
+
     fn status_surface_selections(&self) -> StatusSurfaceSelections {
         let (status_line_items, invalid_status_line_items) = self.status_line_items_with_invalids();
         let (terminal_title_items, invalid_terminal_title_items) =
@@ -140,6 +204,23 @@ impl ChatWidget {
     }
 
     fn sync_status_surface_shared_state(&mut self, selections: &StatusSurfaceSelections) {
+        if !selections.uses_openrouter_cost() || !self.status_line_uses_openrouter() {
+            self.status_line_cost = None;
+            self.status_line_cost_session_id = None;
+            self.status_line_cost_pending = false;
+            self.status_line_cost_lookup_complete = false;
+        } else {
+            self.sync_status_line_cost_state(self.thread_id);
+            if let Some(session_id) = self.thread_id {
+                if !self.status_line_cost_lookup_complete {
+                    self.request_status_line_cost(session_id);
+                }
+            } else {
+                self.status_line_cost_lookup_complete = true;
+                self.status_line_cost_pending = false;
+            }
+        }
+
         if !selections.uses_git_branch() {
             self.status_line_branch = None;
             self.status_line_branch_pending = false;
@@ -723,6 +804,9 @@ impl ChatWidget {
                 "{} in",
                 format_tokens_compact(self.status_line_total_usage().input_tokens)
             )),
+            StatusLineItem::Cost => self
+                .status_line_uses_openrouter()
+                .then(|| format!("${:.2}", self.status_line_cost.unwrap_or(0.0))),
             StatusLineItem::TotalOutputTokens => Some(format!(
                 "{} out",
                 format_tokens_compact(self.status_line_total_usage().output_tokens)
@@ -784,6 +868,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::ContextWindowSize => StatusLineItem::ContextWindowSize,
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
+            StatusSurfacePreviewItem::Cost => StatusLineItem::Cost,
             StatusSurfacePreviewItem::TotalOutputTokens => StatusLineItem::TotalOutputTokens,
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
             StatusSurfacePreviewItem::FastMode => StatusLineItem::FastMode,
@@ -994,6 +1079,44 @@ impl ChatWidget {
         truncated.push_str("...");
         truncated
     }
+}
+
+pub(super) fn read_openrouter_session_cost(codex_home: &Path, session_id: &ThreadId) -> f64 {
+    let path = codex_home
+        .join("openrouter")
+        .join("sessions")
+        .join(session_id.to_string())
+        .join("response.completed.jsonl");
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => return 0.0,
+    };
+    let reader = BufReader::new(file);
+    let mut total = 0.0;
+
+    for line_result in reader.lines() {
+        let Ok(line) = line_result else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(cost_value) = value.get("usage").and_then(|usage| usage.get("cost")) else {
+            continue;
+        };
+        let cost = match cost_value {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.parse::<f64>().ok(),
+            _ => None,
+        };
+        if let Some(cost) = cost
+            && cost.is_finite()
+        {
+            total += cost;
+        }
+    }
+
+    total.max(0.0)
 }
 
 fn five_hour_status_window(
