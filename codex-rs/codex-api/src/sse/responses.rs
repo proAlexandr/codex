@@ -1,3 +1,4 @@
+use crate::common::ResponseCompletedMetadata;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
@@ -324,6 +325,18 @@ impl ResponsesEventError {
     }
 }
 
+fn extract_response_completed_metadata(response: &Value) -> ResponseCompletedMetadata {
+    ResponseCompletedMetadata {
+        model: response
+            .get("model")
+            .and_then(Value::as_str)
+            .map(std::string::ToString::to_string),
+        completed_at: response.get("completed_at").and_then(Value::as_i64),
+        created_at: response.get("created_at").and_then(Value::as_i64),
+        usage: response.get("usage").cloned(),
+    }
+}
+
 pub fn process_responses_event(
     event: ResponsesStreamEvent,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
@@ -433,9 +446,11 @@ pub fn process_responses_event(
         }
         "response.completed" => {
             if let Some(resp_val) = event.response {
+                let metadata = extract_response_completed_metadata(&resp_val);
                 match serde_json::from_value::<ResponseCompleted>(resp_val) {
                     Ok(resp) => {
                         return Ok(Some(ResponseEvent::Completed {
+                            metadata: Some(metadata),
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
                             end_turn: resp.end_turn,
@@ -794,6 +809,7 @@ mod tests {
 
         match &events[2] {
             Ok(ResponseEvent::Completed {
+                metadata,
                 response_id,
                 token_usage,
                 end_turn,
@@ -801,6 +817,7 @@ mod tests {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
                 assert!(end_turn.is_none());
+                assert!(metadata.is_some());
             }
             other => panic!("unexpected third event: {other:?}"),
         }
@@ -988,6 +1005,7 @@ mod tests {
         assert_eq!(events.len(), 1);
         match &events[0] {
             Ok(ResponseEvent::Completed {
+                metadata,
                 response_id,
                 token_usage,
                 end_turn,
@@ -995,6 +1013,7 @@ mod tests {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
                 assert!(end_turn.is_none());
+                assert!(metadata.is_some());
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -1316,6 +1335,7 @@ mod tests {
         assert_matches!(
             &events[1],
             ResponseEvent::Completed {
+                metadata: _,
                 response_id,
                 token_usage: None,
                 end_turn: None,
@@ -1353,6 +1373,7 @@ mod tests {
         assert_matches!(
             &events[2],
             ResponseEvent::Completed {
+                metadata: _,
                 response_id,
                 token_usage: None,
                 end_turn: None,
@@ -1388,6 +1409,7 @@ mod tests {
         assert_matches!(
             &events[1],
             ResponseEvent::Completed {
+                metadata: _,
                 response_id,
                 token_usage: None,
                 end_turn: None,
@@ -1423,6 +1445,7 @@ mod tests {
         assert_matches!(
             &events[1],
             ResponseEvent::Completed {
+                metadata: _,
                 response_id,
                 token_usage: None,
                 end_turn: None,

@@ -90,6 +90,7 @@ pub enum ResponseEvent {
     /// client should not re-estimate them.
     ServerReasoningIncluded(bool),
     Completed {
+        metadata: Option<ResponseCompletedMetadata>,
         response_id: String,
         token_usage: Option<TokenUsage>,
         /// Did the model affirmatively end its turn? Some providers do not set this,
@@ -120,6 +121,14 @@ pub enum ResponseEvent {
     },
     RateLimits(RateLimitSnapshot),
     ModelsEtag(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct ResponseCompletedMetadata {
+    pub model: Option<String>,
+    pub completed_at: Option<i64>,
+    pub created_at: Option<i64>,
+    pub usage: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

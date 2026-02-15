@@ -2000,6 +2000,7 @@ where
                     }
                 }
                 Ok(ResponseEvent::Completed {
+                    metadata,
                     response_id,
                     token_usage,
                     end_turn,
@@ -2022,6 +2023,7 @@ where
                     }
                     if tx_event
                         .send(Ok(ResponseEvent::Completed {
+                            metadata,
                             response_id,
                             token_usage,
                             end_turn,

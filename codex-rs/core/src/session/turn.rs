@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -73,6 +76,7 @@ use codex_analytics::CompactionReason;
 use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
+use codex_api::ResponseCompletedMetadata;
 use codex_async_utils::OrCancelExt;
 use codex_core_plugins::RecommendedPluginCandidatesInput;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
@@ -84,6 +88,7 @@ use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_mcp::ToolInfo;
 use codex_protocol::ResponseItemId;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -1994,6 +1999,59 @@ fn assign_missing_streamed_response_item_id(
     Session::assign_missing_response_item_id(item);
 }
 
+fn append_openrouter_response_completed_log(
+    codex_home: &Path,
+    session_id: &ThreadId,
+    response_id: &str,
+    metadata: &ResponseCompletedMetadata,
+) {
+    let path = codex_home
+        .join("openrouter")
+        .join("sessions")
+        .join(session_id.to_string())
+        .join("response.completed.jsonl");
+
+    if let Some(parent) = path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        error!("failed to create openrouter response.completed log dir: {err}");
+        return;
+    }
+
+    let mut line = match serde_json::to_string(&serde_json::json!({
+        "id": response_id,
+        "model": metadata.model,
+        "completed_at": metadata.completed_at,
+        "created_at": metadata.created_at,
+        "usage": metadata.usage,
+    })) {
+        Ok(line) => line,
+        Err(err) => {
+            error!("failed to serialize openrouter response.completed log line: {err}");
+            return;
+        }
+    };
+    line.push('\n');
+
+    match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(mut file) => {
+            if let Err(err) = file.write_all(line.as_bytes()) {
+                error!("failed to write openrouter response.completed log line: {err}");
+            }
+        }
+        Err(err) => error!("failed to open openrouter response.completed log file: {err}"),
+    }
+}
+
+fn is_openrouter_provider(turn_context: &TurnContext) -> bool {
+    let provider = turn_context.provider.info();
+    provider.name.eq_ignore_ascii_case("openrouter")
+        || provider
+            .base_url
+            .as_deref()
+            .is_some_and(|url| url.to_ascii_lowercase().contains("openrouter"))
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -2339,10 +2397,21 @@ async fn try_run_sampling_request(
                     .await;
             }
             ResponseEvent::Completed {
+                metadata,
                 response_id,
                 token_usage,
                 end_turn,
             } => {
+                if is_openrouter_provider(&turn_context)
+                    && let Some(metadata) = metadata.as_ref()
+                {
+                    append_openrouter_response_completed_log(
+                        turn_context.config.codex_home.as_path(),
+                        &sess.thread_id(),
+                        &response_id,
+                        metadata,
+                    );
+                }
                 flush_assistant_text_segments_all(
                     &sess,
                     &turn_context,
